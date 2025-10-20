@@ -7,6 +7,7 @@ import cookieParser from "cookie-parser";
 import http from 'http'
 
 import allowAccess from './backend/config/cors.js'
+import apiRoutes from './backend/routes/mainRoutes.js'
 
 const app = express()
 
@@ -45,13 +46,13 @@ if (process.env.NODE_ENV === 'production'){
     }))
 }
 
-
+app.use('/v1', apiRoutes)
 
 const PORT = process.env.APP_PORT
 
 
 app.get('/', (req, res)=>{
-    res.send('Welcome to Stitch ')
+    res.status(200).json('Welcome to Stitch ')
 })
 
 
@@ -74,6 +75,7 @@ app.use((req, res)=>{
 
 //Error handling
 app.use((err, req, res, next)=>{
+    if (err) console.log('From Error Handler', err.stack)
     res.status(500).json({
         success : false,
         error : " Internal server error"
