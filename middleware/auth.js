@@ -46,25 +46,36 @@ const authenticateAccessToken = ( req, res, next) =>{
 }
 const verifyRefreshAccessToken = (req, res, next)=>{
     try{
-        const refreshToken = req.cookies.refresh_admin_token || req.cookies.refresh_customer_token || req.cookies.refresh_stylist_token
-        if ( !refreshToken ) return res.status(401).json({
+        const refreshAdminToken = req.cookies.refresh_admin_token 
+        const refreshCustomerToken = req.cookies.refresh_customer_token
+        const refreshArtisanToken =req.cookies.refresh_artisan_token
+
+        if ( !refreshAdminToken && !refreshCustomerToken && !refreshArtisanToken ) return res.status(401).json({
             message : "No refresh token found"
         })
-        const decoded = jwt.verify(refreshToken, process.env.REFRESH_JWT_SECRET, {
-            algorithms : [`HS256`] })
+        let decoded;
+        if ( refreshAdminToken ){
+            decoded = jwt.verify(refreshAdminToken, process.env.REFRESH_JWT_SECRET, {
+                algorithms : [`HS256`] })
 
-        req.adminId = decoded.adminId
-        req.adminUsername = decoded.adminUsername
-
-        req.customerId = decoded.customerId
-        req.customerUsername = decoded.customerUsername
-
-        req.artisanId = decoded.artisanId
-        req.artisanUsername = decoded.artisanUsername;
-        
-        if ( !req.adminId && !req.customerId && !req.artisanId){
-            return res.stauts(401).json({message: "Invalid or expired token"})
+            req.adminId = decoded.adminId || null
+            req.adminUsername = decoded.adminUsername || null
         }
+        if ( refreshCustomerToken ){
+            decoded = jwt.verify(refreshCustomerToken, process.env.REFRESH_JWT_SECRET, {
+                algorithms : [`HS256`] })
+
+            req.customerId = decoded.customerId || null
+            req.customerUsername = decoded.customerUsername || null
+        }
+        
+        if ( refreshArtisanToken ){
+            decoded = jwt.verify(refreshArtisanToken, process.env.REFRESH_JWT_SECRET, {
+                algorithms : [`HS256`] })
+            req.artisanId = decoded.artisanId || null
+            req.artisanUsername = decoded.artisanUsername || null
+        }
+        
         next()
     }catch(error){
          console.log("Error validating refresh token: ", error)
