@@ -21,6 +21,21 @@ const existingUsernameAndEmails = async (email,username) =>{
     return isExisting;
 }
 
+// const existingUserEmail = async ( email) =>{
+//     const [isAdmin, isArtisan, isCustomer] = await Promise.all([
+//         db.query(`SELECT email, username FROM admins WHERE email = $1 `,[email]),
+//         db.query(`SELECT email, username FROM artisans WHERE email = $1`,[email]),
+//         db.query(`SELECT email, username FROM customers WHERE email = $1`,[email]),
+//     ])
+//     const admin = isAdmin.rows[0]
+//     const artisan = isArtisan.rows[0]
+//     const customer = isCustomer.rows[0]
+
+//     const [adminEmail, artisanEmail, customerEmail] = admin || artisan || customer
+//     console.log('adminEmail, artisanEmail, customerEmail', adminEmail, artisanEmail, customerEmail)
+//     return adminEmail, artisanEmail, customerEmail;
+// }
+
 
 const createAdmin = async(req,res)=>{
     try{
@@ -80,7 +95,7 @@ const loginAdmin = async (req, res) =>{
             httpOnly : true,
             secure : process.env.NODE_ENV === 'production',
             sameSite :  process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
-            maxAge : 1 * 60 * 1000
+            maxAge : 5 * 60 * 1000
 
         })
         const refreshPayload = {
@@ -271,7 +286,7 @@ const loginCustomer = async (req, res) =>{
             httpOnly : true,
             secure : process.env.NODE_ENV === 'production',
             sameSite :  process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
-            maxAge : 1 * 60 * 1000
+            maxAge : 5 * 60 * 1000
 
         })
         const refreshPayload = {
@@ -386,7 +401,7 @@ const loginArtisan = async (req, res) =>{
             httpOnly : true,
             secure : process.env.NODE_ENV === 'production',
             sameSite : process.env.NODE_ENV === 'production' ? "None" : "Lax",
-            maxAge : 1 * 60 * 1000
+            maxAge : 5 * 60 * 1000
         })
         const refreshPayload = {
             artisanId : artisanId,
@@ -426,15 +441,22 @@ const logoutArtisan = (req, res)=>{
 const sendOtp = async ( req, res ) =>{
     try{
         const { email } = req.body
-        const [ queryAdmin, queryCustomer ] = await Promise.all([
-            db.query(`SELECT email FROM admins WHERE email=$1`, [email]),
-            db.query(`SELECT email FROM customers WHERE email=$1`, [email]),
+        const [ queryAdmin, queryCustomer, queryArtisan ] = await Promise.all([
+            db.query(`SELECT email FROM admins WHERE email = $1`, [email]),
+            db.query(`SELECT email FROM customers WHERE email = $1`, [email]),
+            db.query(`SELECT email FROM artisans WHERE email = $1`, [email]),
         ])
-        const adminEmail = queryAdmin.rows[0]
-        const customerEmail = queryCustomer.rows[0]
-        if ( !adminEmail && !customerEmail) return res.status(404).json({
-            message : " Unknown email"
-        })
+        const adminEmail = queryAdmin.rows[0];
+        const cuustomerEmail = queryCustomer.rows[0]
+        const artisanEmail = queryArtisan.email
+
+        console.log('adminEmail', adminEmail)
+        console.log('customerEmail', cuustomerEmail)
+        console.log('artisanEmail', artisanEmail)
+
+        if ( !adminEmail && !cuustomerEmail && !artisanEmail){
+            return res.status(401).json('Invalid email')
+        }
         // otp set-up
         const otp = createOtp()
         const otpPayload = {
@@ -449,7 +471,7 @@ const sendOtp = async ( req, res ) =>{
             5 * 60
         )
         await otpQueue.add('send-otp-email', { email, otp }, { attempts: 3})
-        return res.status(200).json({message : "OTP sent to your email"})
+        return res.status(200).json({message : "OTP will be sent to your email shortly"})
     }catch(err){
         console.log('Error sending OTP', err)
         return res.status(500).json({
@@ -465,7 +487,7 @@ const verifyOtp = async ( req, res )=>{
     
         const cachedOTP = await redis.get(`otp:${email}`)
         if ( !cachedOTP ) return res.status(401).json({message: 'OTP not found'})
-        console.log('cachedOtp', cachedOTP)
+       
         const otpData = JSON.parse(cachedOTP)
         if( email !== otpData.email) return res.status(401).json({
             message:'OTP not sent to this email'})
@@ -498,9 +520,9 @@ const changePassword = async ( req, res ) =>{
             db.query('SELECT email FROM customers WHERE email = $1', [email]),
         ])
         const isAdminEmail = queryAdmin.rows.length > 0 
-        const isCuustomerEmail = queryCustomer.rows.length > 0 
+        const isCustomerEmail = queryCustomer.rows.length > 0 
 
-        if( !isAdminEmail && !isCuustomerEmail) return res.status(404).json({message: 'Invalid email'})
+        if( !isAdminEmail && !isCustomerEmail) return res.status(404).json({message: 'Invalid email'})
 
         const cachedOTP = await redis.get(`updatedOtp:${email}`)    
         if( !cachedOTP ) return res.status(401).json({message:'OTP required'})
@@ -518,7 +540,7 @@ const changePassword = async ( req, res ) =>{
             )
             return res.status(201).json({message : 'Admin password updated'})
         }
-        if( isCuustomerEmail) {
+        if( isCustomerEmail) {
             await db.query(`
                 UPDATE customers
                 SET password_hash = $1
