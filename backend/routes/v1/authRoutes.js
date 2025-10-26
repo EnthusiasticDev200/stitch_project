@@ -3,8 +3,7 @@ import {
     createAdmin, createCustomer, logoutAdmin, logoutCustomer, loginAdmin, 
     loginCustomer,createArtisan, loginArtisan, logoutArtisan, refreshAdminToken,
     refreshCustomerToken, refreshArtisanToken,
-    sendOtp,
-    verifyOtp,
+    sendOtp, verifyOtp, verifyUsersEmail,
 
  } 
  from "../../controllers/authController/auth.js";
@@ -48,6 +47,8 @@ router.post('/artisan/refresh', verifyRefreshAccessToken, refreshArtisanToken)
 router.post('/otp/send', sendOtp)
 
 router.post('/otp/verify', verifyOtp)
+
+router.get('/verifyemail/:email/:otp', verifyUsersEmail)
 
 
 export { router as authRouter }
