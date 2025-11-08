@@ -1,6 +1,6 @@
 const allowAccess = [
     'http://localhost:3310',
-   " https://stitchproject.pxxl.click/api" // backend
+    "https://stitch-project.onrender.com" // backend
     
 ]
 export default allowAccess
