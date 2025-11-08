@@ -228,7 +228,7 @@ const createCustomer = async(req,res)=>{
                     first_name, last_name, middle_name, username, email, phone_number, password_hash)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)`, 
                 [firstName, lastName, middleName, username, email, phoneNumber, hashedPassword])
-            return res.status(201).json({ message : 'Customer created successfully' })  
+            return res.status(201).json({ message : 'Email verification link sent to your email' })
         }
          
         const existingUsername = existingCustomer.username
