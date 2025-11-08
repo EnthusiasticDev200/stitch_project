@@ -11,6 +11,8 @@ let connection;
 if (process.env.NODE_ENV === 'development'){
     console.log('Worker actively on DevZone')
     connection = new Redis('127.0.0.1:6379', { maxRetriesPerRequest: null})
+} else {
+    connection = new Redis(process.env.REDIS_URL,{maxRetriesPerRequest : null })
 }
 
 
