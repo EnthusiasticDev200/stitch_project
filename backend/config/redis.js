@@ -4,6 +4,9 @@ import Redis from 'ioredis'
 
 dotenv.config()
 
+
+const prodRedis = process.env.REDIS_URL
+
 let redis
 
 if(process.env.NODE_ENV === 'development'){
