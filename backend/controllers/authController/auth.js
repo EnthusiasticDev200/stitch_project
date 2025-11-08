@@ -3,7 +3,8 @@ import { hash, verify } from 'argon2'
 import redis from '../../config/redis.js'
 import generateToken from '../../../utils/token.js'
 import createOtp from '../../../utils/otp.js'
-import otpQueue from '../../../utils/worker.js'
+import { otpQueue, verifyEmailQueue} from '../../../utils/worker.js'
+
 
 
 
@@ -17,47 +18,73 @@ const existingUsernameAndEmails = async (email,username) =>{
     const artisan = isArtisan.rows[0]
     const customer = isCustomer.rows[0]
 
-    const isExisting = admin || artisan || customer
-    return isExisting;
+    //Helpful when email is unique across tables but cases a problem
+    // in verifyUserEmail when a user has same email in both tbales.
+    const isExisting = {
+        admin : admin,
+        artisan : artisan,
+        customer : customer
+    }
+    return isExisting
 }
 
-// const existingUserEmail = async ( email) =>{
-//     const [isAdmin, isArtisan, isCustomer] = await Promise.all([
-//         db.query(`SELECT email, username FROM admins WHERE email = $1 `,[email]),
-//         db.query(`SELECT email, username FROM artisans WHERE email = $1`,[email]),
-//         db.query(`SELECT email, username FROM customers WHERE email = $1`,[email]),
-//     ])
-//     const admin = isAdmin.rows[0]
-//     const artisan = isArtisan.rows[0]
-//     const customer = isCustomer.rows[0]
-
-//     const [adminEmail, artisanEmail, customerEmail] = admin || artisan || customer
-//     console.log('adminEmail, artisanEmail, customerEmail', adminEmail, artisanEmail, customerEmail)
-//     return adminEmail, artisanEmail, customerEmail;
-// }
-
+const userEmails = async ( email ) =>{
+    const [ admin, artisan, customer ] = await Promise.all([
+        db.query(`SELECT email FROM admins WHERE email = $1 `,[email]),
+        db.query(`SELECT email FROM artisans WHERE email = $1 `,[email]),
+        db.query(`SELECT email FROM customers WHERE email = $1 `,[email]),
+    ])
+    const adminEmail = admin.rows[0]
+    const artisanEmail = artisan.rows[0]
+    const customerEmail = customer.rows[0]
+   
+    const existingUserEmail = {
+        admin : adminEmail,
+        artisan : artisanEmail,
+        customer : customerEmail
+    }
+    return existingUserEmail;
+    
+}
 
 const createAdmin = async(req,res)=>{
     try{
         const {username, email, phoneNumber, password, role} = req.body;
         //set password
         const hashedPassword = await hash(password)
+
         const isExistingUser = await existingUsernameAndEmails(email, username)
-        
-        if ( !isExistingUser ){
+        const existingAdmin = isExistingUser.admin 
+       
+        if ( !existingAdmin ){
+            // create otp
+            const otp = createOtp()
+            const payload = {
+                otp : otp,
+                email : email,
+                verified : false
+            }
+            // cache in redis
+            await redis.set(
+                `emailOTP:${email}`,
+                JSON.stringify(payload),
+                `EX`,
+                10 * 60
+            )
+
+            //await verifyEmailQueue.add(`email-verification` ,{email, otp}, {attempts : 3})
             //create record
             await db.query(`
                 INSERT INTO admins (username, email, phone_number, password_hash, role)
-                VALUES ($1, $2, $3, $4, $5)`, 
-                [username, email, phoneNumber, hashedPassword, role])
-            return res.status(201).json({ message : 'Admin created successfully' })
+                    VALUES ($1, $2, $3, $4, $5)`, 
+                    [username, email, phoneNumber, hashedPassword, role])
+            return res.status(201).json({ message : 'Email verification link sent to your email' })
         }
-        const existingUsername = isExistingUser.username
-        const existingEmail = isExistingUser.email
+        const existingAdminEmail = existingAdmin.email
+        const existingAdminUsername = existingAdmin.username
 
-        if ( existingEmail === email ) return res.status(409).json({ message: 'Email already used'}) 
-        
-        if ( existingUsername === username ) return res.status(409).json({ message: 'Username already used'}) 
+        if(existingAdminEmail === email) return res.status(409).json({message:'Email in use'})
+        if(existingAdminUsername === username) return res.status(409).json({message:'Username in use'})
     }catch(err){
         console.log("Error registering admin", err.stack)
         return res.status(500).json({
@@ -169,82 +196,43 @@ const refreshAdminToken = async ( req, res ) =>{
         })
     }
 }
-const refreshCustomerToken = async (req, res)=>{
-    const customerUsername = req.customerUsername
-    try{
-        const customer = await db.query(`
-            SELECT customer_id, username FROM customers WHERE username = $1`, [customerUsername])
-        if (customer.rows.length === 0) return res.status(404).json({
-                message : "Username doesn't match" })
-        const payload = {
-            customerId : customer.rows[0].customer_id,
-            customerUsername : customer.rows[0].username,
-        }
-        const newCustomerToken = generateToken.accessToken(payload)
-        res.cookie('customer_token', newCustomerToken,{
-            httpOnly : true,
-            secure : process.env.NODE_ENV === 'production',
-            sameSite :  process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
-            maxAge : 5 * 60 * 1000
-        }) 
-        return res.status(200).json({ message : `New customer token granted`})
-    }catch(err){
-        console.log('Error granting customer refresh token', err.stack)
-        return res.status(500).json({
-            message : 'Customer refresh token failed',
-            error : err.message
-        })
-    }
-}
 
-const refreshArtisanToken = async (req,res)=>{
-    const artisanUsername = req.artisanUsername
-    try{
-        const artisan = await db.query(`
-            SELECT artisan_id, username,role FROM artisans WHERE username = $1`, [artisanUsername])
-        
-        if (artisan.rows.length === 0) return res.status(404).json({
-                message : "Invalid artisan username" })
-        const payload = {
-            artisanId : artisan.rows[0].artisan_id,
-            artisanUsername : artisan.rows[0].username,
-            artisanRole : artisan.rows[0].role
-        }
-        const newArtisanToken = generateToken.accessToken(payload)
-        res.cookie('artisan_token', newArtisanToken,{
-            httpOnly : true,
-            secure : process.env.NODE_ENV === 'production',
-            sameSite :  process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
-            maxAge : 5 * 60 * 1000
-        }) 
-        return res.status(200).json({ message : `New artisan token granted`})
-    }catch(err){
-        console.log('Error granting artisan refresh token', err.stack)
-        return res.status(500).json({
-            message : 'Artisan refresh token failed',
-            error : err.message
-        })
-    }
-}
 // CUSTOMER'S LOGIC
 const createCustomer = async(req,res)=>{
     try{
-        const { firstName, lastName, username, email, phoneNumber, password } = req.body;
+        const { firstName, lastName, middleName, username, email, phoneNumber, password } = req.body;
         const hashedPassword = await hash(password)
         
         const isExistingUser = await existingUsernameAndEmails( email, username ) 
-        if ( !isExistingUser ){
+        const existingCustomer = isExistingUser.customer
+        
+        if ( !existingCustomer ){
+             // create otp
+            const otp = createOtp()
+            const payload = {
+                otp : otp,
+                email : email,
+                verified : false
+            }
+            // cache in redis
+            await redis.set(
+                `emailOTP:${email}`,
+                JSON.stringify(payload),
+                `EX`,
+                10 * 60
+            )
+        await verifyEmailQueue.add(`email-verification` ,{email, otp}, {attempts : 3})
         //create record
             await db.query(`
                 INSERT INTO customers (
-                    first_name, last_name, username, email, phone_number, password_hash)
-                VALUES ($1, $2, $3, $4, $5, $6)`, 
-                [firstName, lastName, username, email, phoneNumber, hashedPassword])
+                    first_name, last_name, middle_name, username, email, phone_number, password_hash)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)`, 
+                [firstName, lastName, middleName, username, email, phoneNumber, hashedPassword])
             return res.status(201).json({ message : 'Customer created successfully' })  
         }
          
-        const existingUsername = isExistingUser.username
-        const existingEmail = isExistingUser.email
+        const existingUsername = existingCustomer.username
+        const existingEmail = existingCustomer.email
 
         if ( existingUsername === username ) return res.status(409).json({message:'Username in use'})
         if ( existingEmail === email ) return res.status(409).json({message:'Email already in use'})
@@ -258,13 +246,12 @@ const createCustomer = async(req,res)=>{
     }
 }
 
-
 const loginCustomer = async (req, res) =>{
     try{
         const { email, password } = req.body
         
         const customer = await db.query(`
-            SELECT customer_id, username, password_hash FROM customers WHERE email = $1`, [email])
+            SELECT customer_id, username, is_email_verified, password_hash FROM customers WHERE email = $1`, [email])
         if (customer.rows.length === 0) return res.status(404).json({
             message : " Invalid email"
         })
@@ -275,11 +262,16 @@ const loginCustomer = async (req, res) =>{
 
         if ( !passwordMatch ) return res.status(401).json({
             message : "Wrong password"})
+        
+        const customerEmailVerified = customer.rows[0].is_email_verified
+        if( !customerEmailVerified) return res.status(401).json({mesage:"Email not verified"})
+
         // set up jwt
         const payload = {
             customerId : customer.rows[0].customer_id,
             customerUsername : customer.rows[0].username,
         }
+
         const customerToken = generateToken.accessToken(payload)
         res.clearCookie('customer_token')
         res.cookie('customer_token', customerToken,{
@@ -314,6 +306,35 @@ const loginCustomer = async (req, res) =>{
     }
 }
 
+// CUSTOMER REFRESH TOKEN
+const refreshCustomerToken = async (req, res)=>{
+    const customerUsername = req.customerUsername
+    try{
+        const customer = await db.query(`
+            SELECT customer_id, username FROM customers WHERE username = $1`, [customerUsername])
+        if (customer.rows.length === 0) return res.status(404).json({
+                message : "Username doesn't match" })
+        const payload = {
+            customerId : customer.rows[0].customer_id,
+            customerUsername : customer.rows[0].username,
+        }
+        const newCustomerToken = generateToken.accessToken(payload)
+        res.cookie('customer_token', newCustomerToken,{
+            httpOnly : true,
+            secure : process.env.NODE_ENV === 'production',
+            sameSite :  process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
+            maxAge : 5 * 60 * 1000
+        }) 
+        return res.status(200).json({ message : `New customer token granted`})
+    }catch(err){
+        console.log('Error granting customer refresh token', err.stack)
+        return res.status(500).json({
+            message : 'Customer refresh token failed',
+            error : err.message
+        })
+    }
+}
+
 const logoutCustomer = ( req, res ) =>{
     const customerUsername = req.customerUsername
     try{
@@ -336,28 +357,41 @@ const createArtisan = async( req, res ) =>{
     try{
         const {
             firstName, lastName, middleName, username, gender, dateOfBirth, address,
-            email,phoneNumber,password, role } = req.body
-
+            city, state, email,phoneNumber,password, role } = req.body
+            
         const hashedPassword = await hash(password)
 
         const isExistingUser = await existingUsernameAndEmails( email, username )
+        const existingArtisan = isExistingUser.artisan
             
-        if ( !isExistingUser ){
+        if ( !existingArtisan ){
+            const otp = createOtp()
+            const payload = {
+                otp : otp,
+                email : email,
+                verified : false
+            }
+            // cache in redis
+            await redis.set(`emailOTP:${email}`,
+                JSON.stringify(payload),
+                `EX`,
+                10 * 60
+            )
+            await verifyEmailQueue.add(`email-verification` ,{email, otp}, {attempts : 3})
             await db.query(`
                 INSERT INTO artisans(
                     first_name, last_name, middle_name, username, gender, date_of_birth, address,
-                    email,phone_number,password_hash, role )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, 
-                [ firstName, lastName, middleName, username, gender, dateOfBirth, address, email,
-                 phoneNumber,hashedPassword, role ])
-            return res.status(201).json({message: 'Artisan created successfully'})
+                    city, state, email,phone_number,password_hash, role )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`, 
+                [ firstName, lastName, middleName, username, gender, dateOfBirth, address, 
+                  city, state, email, phoneNumber,hashedPassword, role ])
+            return res.status(201).json({message: 'Email verification link sent to email'})
         }
         
-        const existingUsername = isExistingUser.username
-        const existingEmail = isExistingUser.email
+        const existingUsername = existingArtisan.username
+        const existingEmail = existingArtisan.email
         
         if ( existingEmail === email ) return res.status(409).json({message:'Email already in use'})
-        
         if ( existingUsername === username) return res.status(409).json({message:'Username in use'})
         
     }catch(err){
@@ -373,7 +407,7 @@ const loginArtisan = async (req, res) =>{
     const { email, password } = req.body
     try{
         const artisan = await db.query(`
-            SELECT artisan_id, username, role, password_hash
+            SELECT artisan_id, username, role, password_hash, is_email_verified
             FROM artisans 
             WHERE email = $1`, [email])
         if ( artisan.rows.length === 0) return res.status(404).json({
@@ -384,6 +418,9 @@ const loginArtisan = async (req, res) =>{
         const artisanUsername = artisan.rows[0].username
         const artisanRole = artisan.rows[0].role
         const artisanPassword = artisan.rows[0].password_hash
+        const artisanIsEmailVerified = artisan.rows[0].is_email_verified
+
+        if ( !artisanIsEmailVerified) return res.status(401).json({message:'Email not verified'})
         //compare password
         const passwordMatch = await verify(artisanPassword, password)
         if ( !passwordMatch ) return res.status(401).json({message: "Invalid password"})
@@ -425,6 +462,38 @@ const loginArtisan = async (req, res) =>{
     }
 }
 
+// ARTISAN REFRESH TOKEN LOGIC
+
+const refreshArtisanToken = async (req,res)=>{
+    const artisanUsername = req.artisanUsername
+    try{
+        const artisan = await db.query(`
+            SELECT artisan_id, username,role FROM artisans WHERE username = $1`, [artisanUsername])
+        
+        if (artisan.rows.length === 0) return res.status(404).json({
+                message : "Invalid artisan username" })
+        const payload = {
+            artisanId : artisan.rows[0].artisan_id,
+            artisanUsername : artisan.rows[0].username,
+            artisanRole : artisan.rows[0].role
+        }
+        const newArtisanToken = generateToken.accessToken(payload)
+        res.cookie('artisan_token', newArtisanToken,{
+            httpOnly : true,
+            secure : process.env.NODE_ENV === 'production',
+            sameSite :  process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
+            maxAge : 5 * 60 * 1000
+        }) 
+        return res.status(200).json({ message : `New artisan token granted`})
+    }catch(err){
+        console.log('Error granting artisan refresh token', err.stack)
+        return res.status(500).json({
+            message : 'Artisan refresh token failed',
+            error : err.message
+        })
+    }
+}
+
 const logoutArtisan = (req, res)=>{
     try{
         const artisanUsername = req.artisanUsername
@@ -437,6 +506,49 @@ const logoutArtisan = (req, res)=>{
         return res.status(500).json({ message:"Logout failed", error:err.message})
     }
 }
+    // EMAIL VERIFICATION LOGIC
+const verifyUsersEmail = async ( req, res )=>{
+    const { email, otp } = req.params
+    try{
+        if( !email || !otp) return res.status(401).json({message:'Email verification required'})
+
+        const cachedEmailOTP = await redis.get(`emailOTP:${email}`)
+    
+        const cache = JSON.parse(cachedEmailOTP)
+        
+        if ( email !== cache.email ) return res.status(401).json({
+            message : `OTP not sent to this email`})
+        if ( otp !== cache.otp ) return res.status(401).json({
+            message : `Wrong or expired OTP`})
+
+        const users = await userEmails( email )
+        
+        const isArtisan = users.artisan
+        const isCustomer = users.customer
+  
+        if( isArtisan ){
+            //create record
+            await db.query(`
+                UPDATE artisans
+                SET is_email_verified = true
+                WHERE email = $1`, [email])
+            return res.status(201).json({message:'Email verification successful'})}
+            
+        if( isCustomer ){
+            //create record
+            await db.query(`
+                UPDATE customers
+                SET is_email_verified = true
+                WHERE email = $1`, [email])
+            return res.status(201).json({message:'Email verification successful'})}
+    }catch(err){
+        console.log('Error verifying email', err.stack)
+        return res.status(500).json({
+            message: "Error verifying email",
+            error : err.message})
+    }
+}
+
 
 const sendOtp = async ( req, res ) =>{
     try{
@@ -449,10 +561,6 @@ const sendOtp = async ( req, res ) =>{
         const adminEmail = queryAdmin.rows[0];
         const cuustomerEmail = queryCustomer.rows[0]
         const artisanEmail = queryArtisan.email
-
-        console.log('adminEmail', adminEmail)
-        console.log('customerEmail', cuustomerEmail)
-        console.log('artisanEmail', artisanEmail)
 
         if ( !adminEmail && !cuustomerEmail && !artisanEmail){
             return res.status(401).json('Invalid email')
@@ -568,7 +676,8 @@ export {
     createAdmin, loginAdmin, logoutAdmin, refreshAdminToken,
     createCustomer, loginCustomer, logoutCustomer, refreshCustomerToken,
     createArtisan, loginArtisan, logoutArtisan, refreshArtisanToken,
-    verifyOtp, sendOtp, changePassword
+    verifyOtp, sendOtp, verifyUsersEmail,
+    changePassword
 }
 
 
