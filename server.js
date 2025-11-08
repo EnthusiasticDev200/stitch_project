@@ -58,6 +58,8 @@ app.get('/', (req, res)=>{
 })
 
 
+// Render deployment
+app.get("/healthz", (req, res) => res.send("OK"));
 
 
 server.listen(PORT, ()=>{
