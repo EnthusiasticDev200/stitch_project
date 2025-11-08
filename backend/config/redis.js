@@ -12,7 +12,13 @@ if(process.env.NODE_ENV === 'development'){
         host : '127.0.0.1',
         port : '6379'
     })
+} else{
+  console.log('Redis runnning on PRODUCTION!')
+  redis = new Redis(prodRedis, {
+    tls: prodRedis?.startsWith('rediss://') ? {} : undefined // hits redis internal url
+  })
 }
+  
 
 
 

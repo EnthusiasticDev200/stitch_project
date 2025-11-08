@@ -15,8 +15,9 @@ if(process.env.NODE_ENV === 'development'){
         database: process.env.DEV_DB_NAME,
     });
 } else {
+    console.log('DB on ProDRoll')
     db = new Pool({
-        connectionString : process.env.PXXL_DB,
+        connectionString : process.env.DB_CONNECTION,
         ssl : { rejectUnauthorized : false}
     })
 }
